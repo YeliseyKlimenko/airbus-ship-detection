@@ -17,3 +17,5 @@ Masks for testing weren't provided, so no accuracy assesment has been done.
 ## Model Info
 
 Basic U-Net using keras. Takes 128x128 images as an input (working with the original 768x768 images would take way too much time). I was considering using a pre-trained model, but decided to build one from the ground up and train it from scratch just to see how it goes. Training was done using only the images containing 1 or more ships, in batches of 100 over 2 epochs. Yes, not a lot of epochs - each one was taking over 3 hrs to process, but at least it's better than 1.
+
+Note: the tensorboard logs only show 1 epoch, so they aren't very descriptive
