@@ -3,13 +3,13 @@ import numpy as np
 import tensorflow as tf
 from PIL import Image
 
-# importing the dataset
-ships = pd.read_csv('D:/airbus/train_ship_segmentations_v2.csv')
+# Importing the dataset
+ships = pd.read_csv('train_ship_segmentations_v2.csv')
 
-# dropping the NaN values
+# Dropping the NaN values
 ships_nonempty = ships.dropna().reset_index(drop=True)
 
-# rle decoder to process the masks
+# Rle decoder to process  and resize the masks
 
 
 def rle_decode(mask_rle, shape):
@@ -22,42 +22,52 @@ def rle_decode(mask_rle, shape):
     for lo, hi in zip(starts, ends):
         img[lo:hi] = 1
 
-    return img.reshape(shape).T
-
-
-# setting up the array for X training data
-train_ids = ships_nonempty['ImageId']
-X_train = np.zeros((len(train_ids), 128, 128, 3), dtype=np.uint8)
-I = 0
-
-# converting images to arrays, resizing to 128x128
-for trainid in train_ids:
-    img = Image.open(f'D:/airbus/train_v2/{trainid}')
+    img = Image.fromarray(img.reshape(shape).T)
     newimg = img.resize((128, 128))
-    X_train[I] = newimg
-    I += 1
+    return newimg
 
-print('X_train finished')
 
-# setting up the array for masks
-Y_train = np.zeros((len(train_ids), 128, 128), dtype=np.uint8)
-
-# filling up the array, resizing masks
-for i in np.arange(0, len(train_ids)):
-    mask = ships_nonempty["EncodedPixels"][i]
-    mask = rle_decode(mask, (768, 768))
-    img = Image.fromarray(mask)
-    newimg = img.resize((128, 128))
-    Y_train[i] = newimg
+# Constructing the Y training set
+Y_train = np.zeros((42556, 128, 128), dtype=np.uint8)
+Y_train[0] = rle_decode(ships_nonempty["EncodedPixels"][0], (768, 768))
+j = 0
+for i in np.arange(1, ships_nonempty.ImageId.size):
+    if ships_nonempty.ImageId[i] == ships_nonempty.ImageId[i - 1]:
+        mask1 = Y_train[j]
+        mask2 = rle_decode(ships_nonempty["EncodedPixels"][i], (768, 768))
+        Y_train[j] = (mask1 == 1) | (mask2 == 1)
+    else:
+        j += 1
+        mask2 = rle_decode(ships_nonempty["EncodedPixels"][i], (768, 768))
+        Y_train[j] = mask2
 
 print('Y_train finished')
 
-# input layer
+# Dropping duplicate images
+ships_nonempty = ships_nonempty.drop_duplicates(subset='ImageId', keep='first').reset_index(drop=True)
+
+# Constructing the X training set
+X_train = np.zeros((len(ships_nonempty.ImageId), 128, 128, 3), dtype=np.uint8)
+i = 0
+for trainid in ships_nonempty.ImageId:
+    img = Image.open(f'train_v2/{trainid}')
+    newimg = img.resize((128, 128))
+    X_train[i] = newimg
+    i += 1
+
+print('X_train finished')
+
+# Saving 10k images (roughly 25%) for testing
+Y_train = Y_train[:32556:]
+X_train = X_train[:32556:]
+
+# Input layer
 inputs = tf.keras.layers.Input((128, 128, 3))
-# converting everything to float to avoid issues with keras
+
+# Converting everything to float to avoid issues with keras
 s = tf.keras.layers.Lambda(lambda x: x/255)(inputs)
 
-# contraction path (encoder) for the u-net model
+# Contraction path (encoder) for the u-net model
 c1 = tf.keras.layers.Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(s)
 c1 = tf.keras.layers.Dropout(0.1)(c1)
 c1 = tf.keras.layers.Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c1)
@@ -82,7 +92,7 @@ c5 = tf.keras.layers.Conv2D(256, (3, 3), activation='relu', kernel_initializer='
 c5 = tf.keras.layers.Dropout(0.3)(c5)
 c5 = tf.keras.layers.Conv2D(256, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c5)
 
-# expansive path (decoder)
+# Expansive path (decoder)
 u6 = tf.keras.layers.Conv2DTranspose(128, (2, 2), strides=(2, 2), padding='same')(c5)
 u6 = tf.keras.layers.concatenate([u6, c4])
 c6 = tf.keras.layers.Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(u6)
@@ -107,22 +117,22 @@ c9 = tf.keras.layers.Conv2D(16, (3, 3), activation='relu', kernel_initializer='h
 c9 = tf.keras.layers.Dropout(0.1)(c9)
 c9 = tf.keras.layers.Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c9)
 
-# output layer
+# Output layer
 outputs = tf.keras.layers.Conv2D(1, (1, 1), activation='sigmoid')(c9)
 
-# model compilation
+# Model compilation
 model = tf.keras.Model(inputs=[inputs], outputs=[outputs])
 model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
 
 model.summary()
 
-# setting up checkpoints, enabling TensorBoard, training the model
+# Setting up checkpoints, enabling TensorBoard, training the model
 checkpointer = tf.keras.callbacks.ModelCheckpoint('airbuschallenge.h5', verbose=1, save_best_only=True)
 
 callbacks = [
         tf.keras.callbacks.EarlyStopping(patience=1, monitor='val_loss'),
         tf.keras.callbacks.TensorBoard(log_dir='logs')]
 
-results = model.fit(X_train, Y_train, validation_split=0.1, batch_size=100, epochs=2, callbacks=callbacks)
+results = model.fit(X_train, Y_train, validation_split=0.2, batch_size=100, epochs=4, callbacks=callbacks)
 
 model.save_weights('weights')
